@@ -263,14 +263,16 @@ func newRunContext(t *testing.T, invocationID string, events ...*session.Event) 
 	})
 }
 
-func longRunningCallEvent(invocationID, callID string) *session.Event {
+func longRunningCallEvent(invocationID string, callIDs ...string) *session.Event {
+	parts := make([]*genai.Part, 0, len(callIDs))
+	for _, id := range callIDs {
+		parts = append(parts, &genai.Part{FunctionCall: &genai.FunctionCall{ID: id, Name: "ask_approval"}})
+	}
 	return &session.Event{
 		InvocationID:       invocationID,
 		Author:             "agent",
-		LongRunningToolIDs: []string{callID},
-		LLMResponse: model.LLMResponse{Content: &genai.Content{Role: "model", Parts: []*genai.Part{
-			{FunctionCall: &genai.FunctionCall{ID: callID, Name: "ask_approval"}},
-		}}},
+		LongRunningToolIDs: callIDs,
+		LLMResponse:        model.LLMResponse{Content: &genai.Content{Role: "model", Parts: parts}},
 	}
 }
 
@@ -345,6 +347,31 @@ func TestRetryAndReflect_AfterRunKeepsCountsOfPausedInvocation(t *testing.T) {
 			events: []*session.Event{
 				longRunningCallEvent("inv1", "call-1"),
 				functionResponseEvent("inv1", "agent", "call-1", map[string]any{"status": "pending"}),
+			},
+			wantKept: true,
+		},
+		{
+			name: "one of two parallel long-running calls answered",
+			events: []*session.Event{
+				longRunningCallEvent("inv1", "call-1", "call-2"),
+				functionResponseEvent("inv1", "user", "call-1", map[string]any{"approved": true}),
+			},
+			wantKept: true,
+		},
+		{
+			name: "both parallel long-running calls answered",
+			events: []*session.Event{
+				longRunningCallEvent("inv1", "call-1", "call-2"),
+				functionResponseEvent("inv1", "user", "call-1", map[string]any{"approved": true}),
+				functionResponseEvent("inv1", "user", "call-2", map[string]any{"approved": false}),
+			},
+			wantKept: false,
+		},
+		{
+			name: "response to an unrelated call ID",
+			events: []*session.Event{
+				longRunningCallEvent("inv1", "call-1"),
+				functionResponseEvent("inv1", "user", "call-unknown", map[string]any{"approved": true}),
 			},
 			wantKept: true,
 		},
